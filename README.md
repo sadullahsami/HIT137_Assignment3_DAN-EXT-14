@@ -1,11 +1,10 @@
 # HIT137 Assignment 3 – AI GUI (Prototype)
 
-Minimal scaffold to start the project.
-- Tkinter "hello" window only.
-- Will expand to OOP + Hugging Face models in later commits.
+Now using a minimal **GUI class with tabs**:
+- **AI Models** (placeholder)
+- **Model Information** (placeholder)
+- **OOP Concepts** (placeholder)
 
 ## Run
 ```bash
 python main.py
-
-
