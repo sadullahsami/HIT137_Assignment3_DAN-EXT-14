@@ -1,22 +1,38 @@
 from typing import Any, Dict, List
+from transformers import pipeline
+
 from base_model import BaseModel, log_method_call, validate_input
 
+
 class SentimentAnalysisModel(BaseModel):
-    """Stub for a sentiment-analysis model (to be wired later)."""
+    """RoBERTa-based sentiment classifier (CardiffNLP)."""
     def __init__(self) -> None:
         self._model_name = "cardiffnlp/twitter-roberta-base-sentiment-latest"
-        self._pipeline = None  # real pipeline will be added later
+        self._pipeline = None  # lazily loaded
 
     @log_method_call
     def load_model(self) -> None:
-        # TODO: load transformers sentiment-analysis pipeline
-        self._pipeline = "stub-loaded"
+        if self._pipeline is None:
+            self._pipeline = pipeline(
+                task="sentiment-analysis",
+                model=self._model_name
+            )
 
     @log_method_call
     @validate_input
     def process(self, text: Any) -> List[Dict[str, float]]:
-        # TODO: run inference and return sentiment + confidence
-        return [{"label": "NEUTRAL", "score": 0.95}]
+        if self._pipeline is None:
+            self.load_model()
+
+        payload = str(text).strip()
+        if not payload:
+            return [{"label": "EMPTY_INPUT", "score": 0.0}]
+
+        result = self._pipeline(payload, truncation=True)
+        # pipeline returns a list[dict] normally; normalize anyway
+        if isinstance(result, dict):
+            result = [result]
+        return result
 
     def get_model_info(self) -> Dict[str, Any]:
         return {"name": self._model_name, "type": "sentiment-analysis"}
