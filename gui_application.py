@@ -1,34 +1,33 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import List, Dict, Any
+import threading
 
-# Stub models (real pipelines will come in a later commit)
 from image_classification_model import ImageClassificationModel
 from sentiment_analysis_model import SentimentAnalysisModel
 
 
 class AIModelGUI:
-    """GUI connected to model stubs: choose a model, provide input, process, and view results."""
+    """GUI: select model, input data, process via thread, show results with loading indicator."""
     MODEL_IMAGE = "Image Classification"
     MODEL_TEXT = "Sentiment Analysis"
 
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("HIT137 – AI Model Integration")
-        self.root.geometry("900x600")
+        self.root.geometry("900x640")
 
         # UI state
         self.selected_model = tk.StringVar(value=self.MODEL_TEXT)
 
         self._build_ui()
-        self._on_model_change()  # set initial control states
+        self._on_model_change()  # initial toggle
 
     # ------------------------- UI BUILD -------------------------
     def _build_ui(self):
         nb = ttk.Notebook(self.root)
         nb.pack(fill="both", expand=True)
 
-        # Tabs
         self.tab_ai = ttk.Frame(nb)
         self.tab_info = ttk.Frame(nb)
         self.tab_oop = ttk.Frame(nb)
@@ -65,8 +64,18 @@ class AIModelGUI:
         # Actions
         action_frame = ttk.Frame(self.tab_ai, padding=12)
         action_frame.pack(fill="x")
-        ttk.Button(action_frame, text="Process", command=self._on_process).pack(side="left")
-        ttk.Button(action_frame, text="Clear", command=self._on_clear).pack(side="left", padx=8)
+        self.process_btn = ttk.Button(action_frame, text="Process", command=self._on_process)
+        self.process_btn.pack(side="left")
+        self.clear_btn = ttk.Button(action_frame, text="Clear", command=self._on_clear)
+        self.clear_btn.pack(side="left", padx=8)
+
+        # Status + Progress
+        status_frame = ttk.Frame(self.tab_ai, padding=(12, 0, 12, 12))
+        status_frame.pack(fill="x")
+        self.progress = ttk.Progressbar(status_frame, mode="indeterminate")
+        self.status_lbl = ttk.Label(status_frame, text="Idle.")
+        self.status_lbl.pack(side="left")
+        self.progress.pack(side="right", fill="x", expand=True, padx=(12, 0))
 
         # Output
         output_frame = ttk.LabelFrame(self.tab_ai, text="Output", padding=12)
@@ -79,23 +88,27 @@ class AIModelGUI:
         info_inner = ttk.Frame(self.tab_info, padding=12)
         info_inner.pack(fill="both", expand=True)
 
-        ttk.Label(info_inner, text="Available Models", font=("TkDefaultFont", 11, "bold")).pack(anchor="w")
-        self.info_box = tk.Text(info_inner, height=16, wrap="word", state="disabled")
-        self.info_box.pack(fill="both", expand=True, pady=(6, 0))
+        header = ttk.Frame(info_inner)
+        header.pack(fill="x", pady=(0, 8))
+        ttk.Label(header, text="Available Models", font=("TkDefaultFont", 11, "bold")).pack(side="left")
+        ttk.Button(header, text="Refresh", command=self._populate_model_info).pack(side="right")
+
+        self.info_box = tk.Text(info_inner, height=18, wrap="word", state="disabled")
+        self.info_box.pack(fill="both", expand=True)
 
         self._populate_model_info()
 
-        # --- OOP CONCEPTS TAB (placeholder content) ---
+        # --- OOP CONCEPTS TAB ---
         oop_inner = ttk.Frame(self.tab_oop, padding=12)
         oop_inner.pack(fill="both", expand=True)
         oop_text = (
             "OOP Concepts used:\n"
-            "• Abstraction via BaseModel (interface for all models)\n"
-            "• Inheritance with concrete model classes\n"
-            "• Polymorphism (same .process() for different inputs)\n"
-            "• Encapsulation with private attrs (e.g., _model_name)\n"
-            "• Decorators (@log_method_call, @validate_input)\n"
-            "• Template/Factory patterns (will expand later)\n"
+            "• Abstraction: BaseModel defines the interface\n"
+            "• Inheritance: Specific models derive from BaseModel\n"
+            "• Polymorphism: same .process() across models with different behavior\n"
+            "• Encapsulation: private attrs (e.g., _model_name, _pipeline)\n"
+            "• Decorators: @log_method_call, @validate_input\n"
+            "• Template/Factory patterns in model wiring\n"
         )
         lbl = tk.Text(oop_inner, height=12, wrap="word")
         lbl.insert("1.0", oop_text)
@@ -105,11 +118,7 @@ class AIModelGUI:
     # ------------------------- EVENTS -------------------------
     def _on_model_change(self):
         model = self.selected_model.get()
-        # Browse is useful for images; disable for text sentiment
-        if model == self.MODEL_IMAGE:
-            self.browse_btn.configure(state="normal")
-        else:
-            self.browse_btn.configure(state="disabled")
+        self.browse_btn.configure(state="normal" if model == self.MODEL_IMAGE else "disabled")
 
     def _on_browse(self):
         path = filedialog.askopenfilename(
@@ -120,7 +129,6 @@ class AIModelGUI:
             ],
         )
         if path:
-            # Put the selected path into the input box
             self.input_text.delete("1.0", "end")
             self.input_text.insert("1.0", path)
 
@@ -131,18 +139,26 @@ class AIModelGUI:
     def _on_process(self):
         model_name = self.selected_model.get()
         user_input = self.input_text.get("1.0", "end").strip()
-
         if not user_input:
             messagebox.showwarning("Input required", "Please provide input (text or image path/URL).")
             return
 
+        # Spin up a thread so the UI doesn't freeze during model download/inference
+        self._start_busy("Loading model & processing…")
+        t = threading.Thread(target=self._do_process, args=(model_name, user_input), daemon=True)
+        t.start()
+
+    # ------------------------- BACKGROUND WORK -------------------------
+    def _do_process(self, model_name: str, user_input: str):
         try:
             model = self._get_model(model_name)
-            model.load_model()  # no-op in stubs
+            model.load_model()
             result = model.process(user_input)
-            self._render_result(result)
+            self.root.after(0, lambda: self._render_result(result))
         except Exception as e:
-            messagebox.showerror("Error", f"Processing failed:\n{e}")
+            self.root.after(0, lambda: messagebox.showerror("Processing failed", str(e)))
+        finally:
+            self.root.after(0, self._stop_busy)
 
     # ------------------------- HELPERS -------------------------
     def _get_model(self, model_name: str):
@@ -151,7 +167,6 @@ class AIModelGUI:
         return SentimentAnalysisModel()
 
     def _render_result(self, result: Any):
-        """Accepts either list[dict] or any printable object from the stub."""
         if isinstance(result, list):
             lines: List[str] = []
             for i, item in enumerate(result, start=1):
@@ -170,19 +185,47 @@ class AIModelGUI:
         self.output_text.configure(state="disabled")
 
     def _populate_model_info(self):
-        info_items: List[Dict[str, Any]] = []
+        items: List[Dict[str, Any]] = []
         for model in (ImageClassificationModel(), SentimentAnalysisModel()):
-            info_items.append(model.get_model_info())
+            info = model.get_model_info()
+            items.append(info)
 
         lines = []
-        for it in info_items:
-            lines.append(f"- Name: {it.get('name')}\n  Type: {it.get('type')}\n")
-        text = "Model registry:\n\n" + "\n".join(lines)
+        for it in items:
+            lines.append(
+                "- Name: {name}\n"
+                "  Type: {type}\n"
+                "  Task: {task}\n"
+                "  Provider: {provider}\n"
+                "  Notes: {notes}\n".format(
+                    name=it.get("name", "N/A"),
+                    type=it.get("type", "N/A"),
+                    task=it.get("task", "N/A"),
+                    provider=it.get("provider", "N/A"),
+                    notes=it.get("notes", "—"),
+                )
+            )
 
+        text = "Model registry:\n\n" + "\n".join(lines)
         self.info_box.configure(state="normal")
         self.info_box.delete("1.0", "end")
         self.info_box.insert("1.0", text)
         self.info_box.configure(state="disabled")
+
+    # Busy UI helpers
+    def _start_busy(self, msg: str):
+        self.status_lbl.configure(text=msg)
+        self.process_btn.configure(state="disabled")
+        self.clear_btn.configure(state="disabled")
+        self.browse_btn.configure(state="disabled")
+        self.progress.start(12)
+
+    def _stop_busy(self):
+        self.progress.stop()
+        self.status_lbl.configure(text="Idle.")
+        self.process_btn.configure(state="normal")
+        self.clear_btn.configure(state="normal")
+        self._on_model_change()  # re-enable browse if needed
 
     # Public
     def run(self):

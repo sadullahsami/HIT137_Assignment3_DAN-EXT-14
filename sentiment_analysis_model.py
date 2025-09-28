@@ -13,10 +13,7 @@ class SentimentAnalysisModel(BaseModel):
     @log_method_call
     def load_model(self) -> None:
         if self._pipeline is None:
-            self._pipeline = pipeline(
-                task="sentiment-analysis",
-                model=self._model_name
-            )
+            self._pipeline = pipeline(task="sentiment-analysis", model=self._model_name)
 
     @log_method_call
     @validate_input
@@ -29,10 +26,15 @@ class SentimentAnalysisModel(BaseModel):
             return [{"label": "EMPTY_INPUT", "score": 0.0}]
 
         result = self._pipeline(payload, truncation=True)
-        # pipeline returns a list[dict] normally; normalize anyway
         if isinstance(result, dict):
             result = [result]
         return result
 
     def get_model_info(self) -> Dict[str, Any]:
-        return {"name": self._model_name, "type": "sentiment-analysis"}
+        return {
+            "name": self._model_name,
+            "type": "sentiment-analysis",
+            "task": "Classify text as Positive / Neutral / Negative",
+            "provider": "Hugging Face / CardiffNLP RoBERTa",
+            "notes": "Initial download can be slow depending on network.",
+        }

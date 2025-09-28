@@ -27,11 +27,7 @@ class ImageClassificationModel(BaseModel):
     @log_method_call
     def load_model(self) -> None:
         if self._pipeline is None:
-            # downloads on first use; then cached by HF
-            self._pipeline = pipeline(
-                task="image-classification",
-                model=self._model_name
-            )
+            self._pipeline = pipeline(task="image-classification", model=self._model_name)
 
     @log_method_call
     @validate_input
@@ -52,12 +48,16 @@ class ImageClassificationModel(BaseModel):
                     raise FileNotFoundError(f"Image file not found: {path}")
                 img = Image.open(path).convert("RGB")
 
-        # top-5 predictions
         result = self._pipeline(img, top_k=5)
-        # ensure a List[Dict]
         if isinstance(result, dict):
             result = [result]
         return result
 
     def get_model_info(self) -> Dict[str, Any]:
-        return {"name": self._model_name, "type": "image-classification"}
+        return {
+            "name": self._model_name,
+            "type": "image-classification",
+            "task": "Top-5 object recognition on ImageNet-like labels",
+            "provider": "Hugging Face / Google ViT",
+            "notes": "Downloads on first use; cached afterwards.",
+        }
