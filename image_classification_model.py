@@ -8,14 +8,7 @@ from PIL import Image
 from transformers import pipeline
 
 from base_model import BaseModel, log_method_call, validate_input
-
-
-def _is_url(s: str) -> bool:
-    try:
-        p = urlparse(s)
-        return p.scheme in ("http", "https")
-    except Exception:
-        return False
+from utils import is_url
 
 
 class ImageClassificationModel(BaseModel):
@@ -39,7 +32,7 @@ class ImageClassificationModel(BaseModel):
             img = Image.open(BytesIO(image_input)).convert("RGB")
         else:
             path = str(image_input).strip()
-            if _is_url(path):
+            if is_url(path):
                 resp = requests.get(path, timeout=20)
                 resp.raise_for_status()
                 img = Image.open(BytesIO(resp.content)).convert("RGB")

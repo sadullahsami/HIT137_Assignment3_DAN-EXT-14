@@ -1,3 +1,4 @@
+import os
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import List, Dict, Any
@@ -5,6 +6,7 @@ import threading
 
 from image_classification_model import ImageClassificationModel
 from sentiment_analysis_model import SentimentAnalysisModel
+from utils import is_url
 
 
 class AIModelGUI:
@@ -12,16 +14,21 @@ class AIModelGUI:
     MODEL_IMAGE = "Image Classification"
     MODEL_TEXT = "Sentiment Analysis"
 
+    # sample payloads for quick demos
+    SAMPLE_IMAGE_URL = "https://huggingface.co/datasets/mishig/sample_images/resolve/main/dog.jpg"
+    SAMPLE_TEXT = "I absolutely love this product! It works better than I expected."
+
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("HIT137 – AI Model Integration")
-        self.root.geometry("900x640")
+        self.root.geometry("900x660")
 
         # UI state
         self.selected_model = tk.StringVar(value=self.MODEL_TEXT)
 
         self._build_ui()
         self._on_model_change()  # initial toggle
+        self._update_hint()
 
     # ------------------------- UI BUILD -------------------------
     def _build_ui(self):
@@ -49,7 +56,7 @@ class AIModelGUI:
             width=28,
         )
         self.model_combo.pack(side="left", padx=8)
-        self.model_combo.bind("<<ComboboxSelected>>", lambda e: self._on_model_change())
+        self.model_combo.bind("<<ComboboxSelected>>", lambda e: (self._on_model_change(), self._update_hint()))
 
         self.browse_btn = ttk.Button(top, text="Browse Image…", command=self._on_browse)
         self.browse_btn.pack(side="left", padx=8)
@@ -60,6 +67,11 @@ class AIModelGUI:
 
         self.input_text = tk.Text(input_frame, height=8, wrap="word")
         self.input_text.pack(fill="both", expand=True)
+        self.input_text.bind("<KeyRelease>", lambda e: self._update_hint())
+
+        # Detection hint
+        self.hint_lbl = ttk.Label(input_frame, text="", foreground="")
+        self.hint_lbl.pack(anchor="w", pady=(6, 0))
 
         # Actions
         action_frame = ttk.Frame(self.tab_ai, padding=12)
@@ -68,6 +80,8 @@ class AIModelGUI:
         self.process_btn.pack(side="left")
         self.clear_btn = ttk.Button(action_frame, text="Clear", command=self._on_clear)
         self.clear_btn.pack(side="left", padx=8)
+        self.sample_btn = ttk.Button(action_frame, text="Load Sample", command=self._on_load_sample)
+        self.sample_btn.pack(side="left")
 
         # Status + Progress
         status_frame = ttk.Frame(self.tab_ai, padding=(12, 0, 12, 12))
@@ -131,10 +145,21 @@ class AIModelGUI:
         if path:
             self.input_text.delete("1.0", "end")
             self.input_text.insert("1.0", path)
+            self._update_hint()
 
     def _on_clear(self):
         self.input_text.delete("1.0", "end")
         self._set_output("")
+        self._update_hint()
+
+    def _on_load_sample(self):
+        if self.selected_model.get() == self.MODEL_IMAGE:
+            sample = self.SAMPLE_IMAGE_URL
+        else:
+            sample = self.SAMPLE_TEXT
+        self.input_text.delete("1.0", "end")
+        self.input_text.insert("1.0", sample)
+        self._update_hint()
 
     def _on_process(self):
         model_name = self.selected_model.get()
@@ -143,7 +168,6 @@ class AIModelGUI:
             messagebox.showwarning("Input required", "Please provide input (text or image path/URL).")
             return
 
-        # Spin up a thread so the UI doesn't freeze during model download/inference
         self._start_busy("Loading model & processing…")
         t = threading.Thread(target=self._do_process, args=(model_name, user_input), daemon=True)
         t.start()
@@ -212,12 +236,35 @@ class AIModelGUI:
         self.info_box.insert("1.0", text)
         self.info_box.configure(state="disabled")
 
+    def _update_hint(self):
+        """Show detection hint under the input box."""
+        model = self.selected_model.get()
+        payload = self.input_text.get("1.0", "end").strip()
+
+        if model == self.MODEL_IMAGE:
+            if not payload:
+                msg = "Tip: Paste an image URL (http/https) or click ‘Browse Image…’ to pick a local file."
+            elif is_url(payload):
+                msg = "Detected: Image URL"
+            elif os.path.exists(payload):
+                msg = "Detected: Local file path"
+            else:
+                msg = "Input not recognized as URL/path. Provide a valid image URL or file path."
+        else:
+            if not payload:
+                msg = "Tip: Type or paste any text, then click ‘Process’."
+            else:
+                msg = f"Text length: {len(payload)} characters"
+
+        self.hint_lbl.configure(text=msg)
+
     # Busy UI helpers
     def _start_busy(self, msg: str):
         self.status_lbl.configure(text=msg)
         self.process_btn.configure(state="disabled")
         self.clear_btn.configure(state="disabled")
         self.browse_btn.configure(state="disabled")
+        self.sample_btn.configure(state="disabled")
         self.progress.start(12)
 
     def _stop_busy(self):
@@ -225,6 +272,7 @@ class AIModelGUI:
         self.status_lbl.configure(text="Idle.")
         self.process_btn.configure(state="normal")
         self.clear_btn.configure(state="normal")
+        self.sample_btn.configure(state="normal")
         self._on_model_change()  # re-enable browse if needed
 
     # Public
