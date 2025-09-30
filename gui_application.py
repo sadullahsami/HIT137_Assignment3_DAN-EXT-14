@@ -21,7 +21,10 @@ class AIModelGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("HIT137 – AI Model Integration")
-        self.root.geometry("900x660")
+        self.root.geometry("900x680")
+
+        # Menu (Help)
+        self._build_menu()
 
         # UI state
         self.selected_model = tk.StringVar(value=self.MODEL_TEXT)
@@ -29,6 +32,36 @@ class AIModelGUI:
         self._build_ui()
         self._on_model_change()  # initial toggle
         self._update_hint()
+
+    # ------------------------- MENUS -------------------------
+    def _build_menu(self):
+        menubar = tk.Menu(self.root)
+        help_menu = tk.Menu(menubar, tearoff=0)
+        help_menu.add_command(label="Quick Guide", command=self._show_help)
+        help_menu.add_separator()
+        help_menu.add_command(label="About", command=self._show_about)
+        menubar.add_cascade(label="Help", menu=help_menu)
+        self.root.config(menu=menubar)
+
+    def _show_help(self):
+        msg = (
+            "Quick Guide\n\n"
+            "1) Choose a model from the dropdown.\n"
+            "2) For Image Classification: paste an image URL or click ‘Browse Image…’\n"
+            "   For Sentiment Analysis: type/paste any text.\n"
+            "3) Click ‘Load Sample’ for an instant demo.\n"
+            "4) Click ‘Process’ and wait while the model runs.\n"
+            "5) Use ‘Copy Output’ to put results on your clipboard."
+        )
+        messagebox.showinfo("Quick Guide", msg)
+
+    def _show_about(self):
+        messagebox.showinfo(
+            "About",
+            "HIT137 – AI Model Integration GUI\n"
+            "ViT for images, RoBERTa for sentiment.\n"
+            "Demonstrates OOP, threading, and Tkinter."
+        )
 
     # ------------------------- UI BUILD -------------------------
     def _build_ui(self):
@@ -81,7 +114,9 @@ class AIModelGUI:
         self.clear_btn = ttk.Button(action_frame, text="Clear", command=self._on_clear)
         self.clear_btn.pack(side="left", padx=8)
         self.sample_btn = ttk.Button(action_frame, text="Load Sample", command=self._on_load_sample)
-        self.sample_btn.pack(side="left")
+        self.sample_btn.pack(side="left", padx=0)
+        self.copy_btn = ttk.Button(action_frame, text="Copy Output", command=self._on_copy_output)
+        self.copy_btn.pack(side="left", padx=8)
 
         # Status + Progress
         status_frame = ttk.Frame(self.tab_ai, padding=(12, 0, 12, 12))
@@ -95,7 +130,7 @@ class AIModelGUI:
         output_frame = ttk.LabelFrame(self.tab_ai, text="Output", padding=12)
         output_frame.pack(fill="both", expand=True, padx=12, pady=8)
 
-        self.output_text = tk.Text(output_frame, height=12, wrap="word", state="disabled")
+        self.output_text = tk.Text(output_frame, height=14, wrap="word", state="disabled")
         self.output_text.pack(fill="both", expand=True)
 
         # --- MODEL INFORMATION TAB ---
@@ -161,6 +196,16 @@ class AIModelGUI:
         self.input_text.insert("1.0", sample)
         self._update_hint()
 
+    def _on_copy_output(self):
+        text = self.output_text.get("1.0", "end").strip()
+        if not text:
+            messagebox.showinfo("Copy Output", "Nothing to copy.")
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.root.update()  # keep clipboard after window loses focus
+        messagebox.showinfo("Copy Output", "Output copied to clipboard.")
+
     def _on_process(self):
         model_name = self.selected_model.get()
         user_input = self.input_text.get("1.0", "end").strip()
@@ -192,14 +237,30 @@ class AIModelGUI:
 
     def _render_result(self, result: Any):
         if isinstance(result, list):
-            lines: List[str] = []
-            for i, item in enumerate(result, start=1):
-                label = item.get("label", "N/A")
-                score = item.get("score", "N/A")
-                lines.append(f"{i}. {label} — score: {score}")
-            self._set_output("\n".join(lines))
+            # pretty format with confidence bars
+            self._set_output(self._format_predictions(result))
         else:
             self._set_output(str(result))
+
+    def _format_predictions(self, preds: List[Dict[str, Any]]) -> str:
+        lines: List[str] = []
+        for i, item in enumerate(preds, start=1):
+            label = str(item.get("label", "N/A"))
+            try:
+                score = float(item.get("score", 0))
+            except Exception:
+                score = 0.0
+            bar = self._bar(score, width=24)  # 24-unit bar
+            pct = f"{score * 100:.1f}%"
+            lines.append(f"{i:>2}. {label}\n    {bar} {pct}")
+        return "\n".join(lines)
+
+    def _bar(self, score: float, width: int = 24) -> str:
+        """Return a simple text bar (█ = filled, · = empty)."""
+        if score < 0: score = 0.0
+        if score > 1: score = 1.0
+        filled = int(round(score * width))
+        return "█" * filled + "·" * (width - filled)
 
     def _set_output(self, text: str):
         self.output_text.configure(state="normal")
@@ -265,6 +326,7 @@ class AIModelGUI:
         self.clear_btn.configure(state="disabled")
         self.browse_btn.configure(state="disabled")
         self.sample_btn.configure(state="disabled")
+        self.copy_btn.configure(state="disabled")
         self.progress.start(12)
 
     def _stop_busy(self):
@@ -273,6 +335,7 @@ class AIModelGUI:
         self.process_btn.configure(state="normal")
         self.clear_btn.configure(state="normal")
         self.sample_btn.configure(state="normal")
+        self.copy_btn.configure(state="normal")
         self._on_model_change()  # re-enable browse if needed
 
     # Public
