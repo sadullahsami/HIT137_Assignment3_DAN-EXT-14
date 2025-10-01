@@ -1,7 +1,7 @@
 from typing import Any, Dict, List
 from transformers import pipeline
 
-from base_model import BaseModel, log_method_call, validate_input
+from base_model import BaseModel, log_method_call, validate_text_input
 
 
 class SentimentAnalysisModel(BaseModel):
@@ -16,16 +16,12 @@ class SentimentAnalysisModel(BaseModel):
             self._pipeline = pipeline(task="sentiment-analysis", model=self._model_name)
 
     @log_method_call
-    @validate_input
+    @validate_text_input
     def process(self, text: Any) -> List[Dict[str, float]]:
         if self._pipeline is None:
             self.load_model()
 
-        payload = str(text).strip()
-        if not payload:
-            return [{"label": "EMPTY_INPUT", "score": 0.0}]
-
-        result = self._pipeline(payload, truncation=True)
+        result = self._pipeline(text, truncation=True)
         if isinstance(result, dict):
             result = [result]
         return result

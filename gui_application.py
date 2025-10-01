@@ -6,6 +6,7 @@ import threading
 
 from image_classification_model import ImageClassificationModel
 from sentiment_analysis_model import SentimentAnalysisModel
+from base_model import friendly_error_message
 from utils import is_url
 
 
@@ -60,7 +61,7 @@ class AIModelGUI:
             "About",
             "HIT137 – AI Model Integration GUI\n"
             "ViT for images, RoBERTa for sentiment.\n"
-            "Demonstrates OOP, threading, and Tkinter."
+            "Demonstrates OOP, validation, threading, and Tkinter."
         )
 
     # ------------------------- UI BUILD -------------------------
@@ -156,7 +157,7 @@ class AIModelGUI:
             "• Inheritance: Specific models derive from BaseModel\n"
             "• Polymorphism: same .process() across models with different behavior\n"
             "• Encapsulation: private attrs (e.g., _model_name, _pipeline)\n"
-            "• Decorators: @log_method_call, @validate_input\n"
+            "• Decorators: @log_method_call, @validate_*_input\n"
             "• Template/Factory patterns in model wiring\n"
         )
         lbl = tk.Text(oop_inner, height=12, wrap="word")
@@ -203,14 +204,18 @@ class AIModelGUI:
             return
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
-        self.root.update()  # keep clipboard after window loses focus
+        self.root.update()
         messagebox.showinfo("Copy Output", "Output copied to clipboard.")
 
     def _on_process(self):
         model_name = self.selected_model.get()
         user_input = self.input_text.get("1.0", "end").strip()
         if not user_input:
-            messagebox.showwarning("Input required", "Please provide input (text or image path/URL).")
+            # GUI-side check (extra safety)
+            if model_name == self.MODEL_TEXT:
+                messagebox.showwarning("Input required", "Please enter some text to analyse.")
+            else:
+                messagebox.showwarning("Input required", "Please provide an image URL or choose a local file.")
             return
 
         self._start_busy("Loading model & processing…")
@@ -225,7 +230,8 @@ class AIModelGUI:
             result = model.process(user_input)
             self.root.after(0, lambda: self._render_result(result))
         except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("Processing failed", str(e)))
+            msg = friendly_error_message(e)
+            self.root.after(0, lambda: messagebox.showerror("Processing failed", msg))
         finally:
             self.root.after(0, self._stop_busy)
 
@@ -237,7 +243,6 @@ class AIModelGUI:
 
     def _render_result(self, result: Any):
         if isinstance(result, list):
-            # pretty format with confidence bars
             self._set_output(self._format_predictions(result))
         else:
             self._set_output(str(result))
@@ -250,13 +255,12 @@ class AIModelGUI:
                 score = float(item.get("score", 0))
             except Exception:
                 score = 0.0
-            bar = self._bar(score, width=24)  # 24-unit bar
+            bar = self._bar(score, width=24)
             pct = f"{score * 100:.1f}%"
             lines.append(f"{i:>2}. {label}\n    {bar} {pct}")
         return "\n".join(lines)
 
     def _bar(self, score: float, width: int = 24) -> str:
-        """Return a simple text bar (█ = filled, · = empty)."""
         if score < 0: score = 0.0
         if score > 1: score = 1.0
         filled = int(round(score * width))
@@ -336,8 +340,7 @@ class AIModelGUI:
         self.clear_btn.configure(state="normal")
         self.sample_btn.configure(state="normal")
         self.copy_btn.configure(state="normal")
-        self._on_model_change()  # re-enable browse if needed
-
-    # Public
+        self._on_model_change()
+    
     def run(self):
         self.root.mainloop()
