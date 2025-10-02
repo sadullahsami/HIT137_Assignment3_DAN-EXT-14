@@ -3,12 +3,12 @@ from transformers import pipeline
 
 from base_model import BaseModel, log_method_call, validate_text_input
 
-
 class SentimentAnalysisModel(BaseModel):
     """RoBERTa-based sentiment classifier (CardiffNLP)."""
     def __init__(self) -> None:
         self._model_name = "cardiffnlp/twitter-roberta-base-sentiment-latest"
         self._pipeline = None  # lazily loaded
+        self._max_len = 256    # can be set by GUI before processing
 
     @log_method_call
     def load_model(self) -> None:
@@ -21,7 +21,9 @@ class SentimentAnalysisModel(BaseModel):
         if self._pipeline is None:
             self.load_model()
 
-        result = self._pipeline(text, truncation=True)
+        max_len = int(getattr(self, "_max_len", 256))
+        payload = str(text)[:max_len]
+        result = self._pipeline(payload, truncation=True)
         if isinstance(result, dict):
             result = [result]
         return result

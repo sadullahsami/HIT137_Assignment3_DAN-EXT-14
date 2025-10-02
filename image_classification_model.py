@@ -9,12 +9,12 @@ from transformers import pipeline
 from base_model import BaseModel, log_method_call, validate_image_input
 from utils import is_url
 
-
 class ImageClassificationModel(BaseModel):
     """Vision Transformer (ViT) based image classifier."""
     def __init__(self) -> None:
         self._model_name = "google/vit-base-patch16-224"
         self._pipeline = None  # lazily loaded
+        self._top_k = 5        # can be set by GUI before processing
 
     @log_method_call
     def load_model(self) -> None:
@@ -27,7 +27,7 @@ class ImageClassificationModel(BaseModel):
         if self._pipeline is None:
             self.load_model()
 
-        # image_input is guaranteed to be bytes or a valid URL/path by the decorator
+        # prepare PIL image
         if isinstance(image_input, (bytes, bytearray)):
             img = Image.open(BytesIO(image_input)).convert("RGB")
         else:
@@ -41,7 +41,8 @@ class ImageClassificationModel(BaseModel):
                     raise FileNotFoundError(f"{s}")
                 img = Image.open(s).convert("RGB")
 
-        result = self._pipeline(img, top_k=5)
+        top_k = getattr(self, "_top_k", 5)
+        result = self._pipeline(img, top_k=top_k)
         if isinstance(result, dict):
             result = [result]
         return result
@@ -50,7 +51,7 @@ class ImageClassificationModel(BaseModel):
         return {
             "name": self._model_name,
             "type": "image-classification",
-            "task": "Top-5 object recognition on ImageNet-like labels",
+            "task": "Top-K object recognition on ImageNet-like labels",
             "provider": "Hugging Face / Google ViT",
             "notes": "Downloads on first use; cached afterwards.",
         }

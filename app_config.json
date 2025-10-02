@@ -1,0 +1,4 @@
+{
+  "image_top_k": 5,
+  "text_max_len": 256
+}

@@ -7,41 +7,50 @@ import threading
 from image_classification_model import ImageClassificationModel
 from sentiment_analysis_model import SentimentAnalysisModel
 from base_model import friendly_error_message
-from utils import is_url
-
+from utils import is_url, load_config, save_config, clamp_int
 
 class AIModelGUI:
-    """GUI: select model, input data, process via thread, show results with loading indicator."""
+    """GUI: select model, input data, threaded processing, settings with persistence."""
     MODEL_IMAGE = "Image Classification"
     MODEL_TEXT = "Sentiment Analysis"
 
-    # sample payloads for quick demos
     SAMPLE_IMAGE_URL = "https://huggingface.co/datasets/mishig/sample_images/resolve/main/dog.jpg"
     SAMPLE_TEXT = "I absolutely love this product! It works better than I expected."
 
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("HIT137 – AI Model Integration")
-        self.root.geometry("900x680")
+        self.root.geometry("920x700")
 
-        # Menu (Help)
+        # Load persisted config (or defaults)
+        self.config = load_config()
+
+        # Menus
         self._build_menu()
 
         # UI state
         self.selected_model = tk.StringVar(value=self.MODEL_TEXT)
 
         self._build_ui()
-        self._on_model_change()  # initial toggle
+        self._on_model_change()
         self._update_hint()
 
     # ------------------------- MENUS -------------------------
     def _build_menu(self):
         menubar = tk.Menu(self.root)
+
+        # Settings menu
+        settings_menu = tk.Menu(menubar, tearoff=0)
+        settings_menu.add_command(label="Preferences…", command=self._open_settings)
+        menubar.add_cascade(label="Settings", menu=settings_menu)
+
+        # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
         help_menu.add_command(label="Quick Guide", command=self._show_help)
         help_menu.add_separator()
         help_menu.add_command(label="About", command=self._show_about)
         menubar.add_cascade(label="Help", menu=help_menu)
+
         self.root.config(menu=menubar)
 
     def _show_help(self):
@@ -52,7 +61,8 @@ class AIModelGUI:
             "   For Sentiment Analysis: type/paste any text.\n"
             "3) Click ‘Load Sample’ for an instant demo.\n"
             "4) Click ‘Process’ and wait while the model runs.\n"
-            "5) Use ‘Copy Output’ to put results on your clipboard."
+            "5) Use ‘Copy Output’ to put results on your clipboard.\n"
+            "6) Settings → Preferences… to configure Top-K (image) and Max Text Length."
         )
         messagebox.showinfo("Quick Guide", msg)
 
@@ -61,8 +71,46 @@ class AIModelGUI:
             "About",
             "HIT137 – AI Model Integration GUI\n"
             "ViT for images, RoBERTa for sentiment.\n"
-            "Demonstrates OOP, validation, threading, and Tkinter."
+            "Includes persistent Settings (Top-K, Max Text Length)."
         )
+
+    def _open_settings(self):
+        win = tk.Toplevel(self.root)
+        win.title("Preferences")
+        win.transient(self.root)
+        win.grab_set()
+
+        frm = ttk.Frame(win, padding=16)
+        frm.pack(fill="both", expand=True)
+
+        # Top-K (image)
+        ttk.Label(frm, text="Image Top-K predictions (1–10):").grid(row=0, column=0, sticky="w", pady=(0,6))
+        topk_var = tk.IntVar(value=int(self.config.get("image_top_k", 5)))
+        topk_spin = tk.Spinbox(frm, from_=1, to=10, textvariable=topk_var, width=6)
+        topk_spin.grid(row=0, column=1, sticky="w", pady=(0,6), padx=(8,0))
+
+        # Max text length
+        ttk.Label(frm, text="Sentiment Max Text Length (32–2048):").grid(row=1, column=0, sticky="w", pady=(0,6))
+        maxlen_var = tk.IntVar(value=int(self.config.get("text_max_len", 256)))
+        maxlen_spin = tk.Spinbox(frm, from_=32, to=2048, increment=32, textvariable=maxlen_var, width=6)
+        maxlen_spin.grid(row=1, column=1, sticky="w", pady=(0,6), padx=(8,0))
+
+        # Buttons
+        btns = ttk.Frame(frm)
+        btns.grid(row=2, column=0, columnspan=2, sticky="e", pady=(12,0))
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right")
+        def on_save():
+            new_topk = clamp_int(topk_var.get(), 1, 10)
+            new_maxlen = clamp_int(maxlen_var.get(), 32, 2048)
+            self.config["image_top_k"] = new_topk
+            self.config["text_max_len"] = new_maxlen
+            save_config(self.config)
+            messagebox.showinfo("Preferences", "Settings saved.")
+            win.destroy()
+        ttk.Button(btns, text="Save", command=on_save).pack(side="right", padx=(0,8))
+
+        for i in range(2):
+            frm.columnconfigure(i, weight=1)
 
     # ------------------------- UI BUILD -------------------------
     def _build_ui(self):
@@ -154,11 +202,11 @@ class AIModelGUI:
         oop_text = (
             "OOP Concepts used:\n"
             "• Abstraction: BaseModel defines the interface\n"
-            "• Inheritance: Specific models derive from BaseModel\n"
-            "• Polymorphism: same .process() across models with different behavior\n"
+            "• Inheritance: models derive from BaseModel\n"
+            "• Polymorphism: same .process() with different behavior\n"
             "• Encapsulation: private attrs (e.g., _model_name, _pipeline)\n"
-            "• Decorators: @log_method_call, @validate_*_input\n"
-            "• Template/Factory patterns in model wiring\n"
+            "• Decorators: validation & logging\n"
+            "• Settings persistence via utils.load_config/save_config"
         )
         lbl = tk.Text(oop_inner, height=12, wrap="word")
         lbl.insert("1.0", oop_text)
@@ -189,10 +237,7 @@ class AIModelGUI:
         self._update_hint()
 
     def _on_load_sample(self):
-        if self.selected_model.get() == self.MODEL_IMAGE:
-            sample = self.SAMPLE_IMAGE_URL
-        else:
-            sample = self.SAMPLE_TEXT
+        sample = self.SAMPLE_IMAGE_URL if self.selected_model.get() == self.MODEL_IMAGE else self.SAMPLE_TEXT
         self.input_text.delete("1.0", "end")
         self.input_text.insert("1.0", sample)
         self._update_hint()
@@ -211,7 +256,6 @@ class AIModelGUI:
         model_name = self.selected_model.get()
         user_input = self.input_text.get("1.0", "end").strip()
         if not user_input:
-            # GUI-side check (extra safety)
             if model_name == self.MODEL_TEXT:
                 messagebox.showwarning("Input required", "Please enter some text to analyse.")
             else:
@@ -226,6 +270,13 @@ class AIModelGUI:
     def _do_process(self, model_name: str, user_input: str):
         try:
             model = self._get_model(model_name)
+
+            # Apply settings to the model instance
+            if isinstance(model, ImageClassificationModel):
+                model._top_k = clamp_int(self.config.get("image_top_k", 5), 1, 10)
+            else:
+                model._max_len = clamp_int(self.config.get("text_max_len", 256), 32, 2048)
+
             model.load_model()
             result = model.process(user_input)
             self.root.after(0, lambda: self._render_result(result))
@@ -302,10 +353,8 @@ class AIModelGUI:
         self.info_box.configure(state="disabled")
 
     def _update_hint(self):
-        """Show detection hint under the input box."""
         model = self.selected_model.get()
         payload = self.input_text.get("1.0", "end").strip()
-
         if model == self.MODEL_IMAGE:
             if not payload:
                 msg = "Tip: Paste an image URL (http/https) or click ‘Browse Image…’ to pick a local file."
@@ -319,8 +368,7 @@ class AIModelGUI:
             if not payload:
                 msg = "Tip: Type or paste any text, then click ‘Process’."
             else:
-                msg = f"Text length: {len(payload)} characters"
-
+                msg = f"Text length: {len(payload)} characters (max {self.config.get('text_max_len', 256)})"
         self.hint_lbl.configure(text=msg)
 
     # Busy UI helpers
@@ -341,6 +389,6 @@ class AIModelGUI:
         self.sample_btn.configure(state="normal")
         self.copy_btn.configure(state="normal")
         self._on_model_change()
-    
+
     def run(self):
         self.root.mainloop()
