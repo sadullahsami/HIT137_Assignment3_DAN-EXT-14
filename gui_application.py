@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import List, Dict, Any
@@ -10,7 +12,7 @@ from base_model import friendly_error_message
 from utils import is_url, load_config, save_config, clamp_int
 
 class AIModelGUI:
-    """GUI: select model, input data, threaded processing, settings with persistence."""
+    """GUI: select model, input data, threaded processing, settings with persistence, logs & save results."""
     MODEL_IMAGE = "Image Classification"
     MODEL_TEXT = "Sentiment Analysis"
 
@@ -20,24 +22,32 @@ class AIModelGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("HIT137 – AI Model Integration")
-        self.root.geometry("920x700")
+        self.root.geometry("940x760")
 
         # Load persisted config (or defaults)
         self.config = load_config()
 
-        # Menus
+        # Menu bars
         self._build_menu()
 
         # UI state
         self.selected_model = tk.StringVar(value=self.MODEL_TEXT)
+        self.logs_visible = False
 
         self._build_ui()
         self._on_model_change()
         self._update_hint()
+        self._log("Application started.")
 
     # ------------------------- MENUS -------------------------
     def _build_menu(self):
         menubar = tk.Menu(self.root)
+
+        # View menu
+        view_menu = tk.Menu(menubar, tearoff=0)
+        view_menu.add_command(label="Toggle Logs Panel", command=self._toggle_logs)
+        view_menu.add_command(label="Clear Logs", command=self._clear_logs)
+        menubar.add_cascade(label="View", menu=view_menu)
 
         # Settings menu
         settings_menu = tk.Menu(menubar, tearoff=0)
@@ -61,8 +71,8 @@ class AIModelGUI:
             "   For Sentiment Analysis: type/paste any text.\n"
             "3) Click ‘Load Sample’ for an instant demo.\n"
             "4) Click ‘Process’ and wait while the model runs.\n"
-            "5) Use ‘Copy Output’ to put results on your clipboard.\n"
-            "6) Settings → Preferences… to configure Top-K (image) and Max Text Length."
+            "5) Use ‘Copy Output’ to copy results; ‘Save Results’ to write to a file.\n"
+            "6) View → Toggle Logs Panel to see step-by-step logs."
         )
         messagebox.showinfo("Quick Guide", msg)
 
@@ -71,7 +81,7 @@ class AIModelGUI:
             "About",
             "HIT137 – AI Model Integration GUI\n"
             "ViT for images, RoBERTa for sentiment.\n"
-            "Includes persistent Settings (Top-K, Max Text Length)."
+            "Now with logs panel and save-to-file."
         )
 
     def _open_settings(self):
@@ -83,28 +93,22 @@ class AIModelGUI:
         frm = ttk.Frame(win, padding=16)
         frm.pack(fill="both", expand=True)
 
-        # Top-K (image)
         ttk.Label(frm, text="Image Top-K predictions (1–10):").grid(row=0, column=0, sticky="w", pady=(0,6))
         topk_var = tk.IntVar(value=int(self.config.get("image_top_k", 5)))
-        topk_spin = tk.Spinbox(frm, from_=1, to=10, textvariable=topk_var, width=6)
-        topk_spin.grid(row=0, column=1, sticky="w", pady=(0,6), padx=(8,0))
+        tk.Spinbox(frm, from_=1, to=10, textvariable=topk_var, width=6).grid(row=0, column=1, sticky="w", pady=(0,6), padx=(8,0))
 
-        # Max text length
         ttk.Label(frm, text="Sentiment Max Text Length (32–2048):").grid(row=1, column=0, sticky="w", pady=(0,6))
         maxlen_var = tk.IntVar(value=int(self.config.get("text_max_len", 256)))
-        maxlen_spin = tk.Spinbox(frm, from_=32, to=2048, increment=32, textvariable=maxlen_var, width=6)
-        maxlen_spin.grid(row=1, column=1, sticky="w", pady=(0,6), padx=(8,0))
+        tk.Spinbox(frm, from_=32, to=2048, increment=32, textvariable=maxlen_var, width=6).grid(row=1, column=1, sticky="w", pady=(0,6), padx=(8,0))
 
-        # Buttons
         btns = ttk.Frame(frm)
         btns.grid(row=2, column=0, columnspan=2, sticky="e", pady=(12,0))
         ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right")
         def on_save():
-            new_topk = clamp_int(topk_var.get(), 1, 10)
-            new_maxlen = clamp_int(maxlen_var.get(), 32, 2048)
-            self.config["image_top_k"] = new_topk
-            self.config["text_max_len"] = new_maxlen
+            self.config["image_top_k"] = clamp_int(topk_var.get(), 1, 10)
+            self.config["text_max_len"] = clamp_int(maxlen_var.get(), 32, 2048)
             save_config(self.config)
+            self._log(f"Settings saved: top_k={self.config['image_top_k']}, text_max_len={self.config['text_max_len']}")
             messagebox.showinfo("Preferences", "Settings saved.")
             win.destroy()
         ttk.Button(btns, text="Save", command=on_save).pack(side="right", padx=(0,8))
@@ -138,7 +142,7 @@ class AIModelGUI:
             width=28,
         )
         self.model_combo.pack(side="left", padx=8)
-        self.model_combo.bind("<<ComboboxSelected>>", lambda e: (self._on_model_change(), self._update_hint()))
+        self.model_combo.bind("<<ComboboxSelected>>", lambda e: (self._on_model_change(), self._update_hint(), self._log(f"Model selected: {self.selected_model.get()}")))
 
         self.browse_btn = ttk.Button(top, text="Browse Image…", command=self._on_browse)
         self.browse_btn.pack(side="left", padx=8)
@@ -166,6 +170,8 @@ class AIModelGUI:
         self.sample_btn.pack(side="left", padx=0)
         self.copy_btn = ttk.Button(action_frame, text="Copy Output", command=self._on_copy_output)
         self.copy_btn.pack(side="left", padx=8)
+        self.save_btn = ttk.Button(action_frame, text="Save Results", command=self._on_save_results)
+        self.save_btn.pack(side="left", padx=0)
 
         # Status + Progress
         status_frame = ttk.Frame(self.tab_ai, padding=(12, 0, 12, 12))
@@ -181,6 +187,11 @@ class AIModelGUI:
 
         self.output_text = tk.Text(output_frame, height=14, wrap="word", state="disabled")
         self.output_text.pack(fill="both", expand=True)
+
+        # Logs panel (hidden by default)
+        self.logs_frame = ttk.LabelFrame(self.tab_ai, text="Logs", padding=8)
+        self.log_text = tk.Text(self.logs_frame, height=10, wrap="word", state="disabled")
+        self.log_text.pack(fill="both", expand=True)
 
         # --- MODEL INFORMATION TAB ---
         info_inner = ttk.Frame(self.tab_info, padding=12)
@@ -206,7 +217,8 @@ class AIModelGUI:
             "• Polymorphism: same .process() with different behavior\n"
             "• Encapsulation: private attrs (e.g., _model_name, _pipeline)\n"
             "• Decorators: validation & logging\n"
-            "• Settings persistence via utils.load_config/save_config"
+            "• Settings persistence via utils.load_config/save_config\n"
+            "• Logging: in-UI logs panel with toggle and clear"
         )
         lbl = tk.Text(oop_inner, height=12, wrap="word")
         lbl.insert("1.0", oop_text)
@@ -229,18 +241,21 @@ class AIModelGUI:
         if path:
             self.input_text.delete("1.0", "end")
             self.input_text.insert("1.0", path)
+            self._log(f"Selected image file: {path}")
             self._update_hint()
 
     def _on_clear(self):
         self.input_text.delete("1.0", "end")
         self._set_output("")
         self._update_hint()
+        self._log("Cleared input and output.")
 
     def _on_load_sample(self):
         sample = self.SAMPLE_IMAGE_URL if self.selected_model.get() == self.MODEL_IMAGE else self.SAMPLE_TEXT
         self.input_text.delete("1.0", "end")
         self.input_text.insert("1.0", sample)
         self._update_hint()
+        self._log("Loaded sample input.")
 
     def _on_copy_output(self):
         text = self.output_text.get("1.0", "end").strip()
@@ -250,7 +265,24 @@ class AIModelGUI:
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
         self.root.update()
+        self._log("Output copied to clipboard.")
         messagebox.showinfo("Copy Output", "Output copied to clipboard.")
+
+    def _on_save_results(self):
+        """Save current output to results/YYYYmmdd_HHMMSS.txt"""
+        text = self.output_text.get("1.0", "end").strip()
+        if not text:
+            messagebox.showinfo("Save Results", "Nothing to save.")
+            return
+        out_dir = Path("results")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        fname = out_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        try:
+            fname.write_text(text, encoding="utf-8")
+            self._log(f"Results saved: {fname}")
+            messagebox.showinfo("Save Results", f"Saved to:\n{fname}")
+        except Exception as e:
+            messagebox.showerror("Save Results", f"Failed to save: {e}")
 
     def _on_process(self):
         model_name = self.selected_model.get()
@@ -263,6 +295,7 @@ class AIModelGUI:
             return
 
         self._start_busy("Loading model & processing…")
+        self._log(f"Processing started with model: {model_name}")
         t = threading.Thread(target=self._do_process, args=(model_name, user_input), daemon=True)
         t.start()
 
@@ -280,9 +313,11 @@ class AIModelGUI:
             model.load_model()
             result = model.process(user_input)
             self.root.after(0, lambda: self._render_result(result))
+            self.root.after(0, lambda: self._log("Processing finished successfully."))
         except Exception as e:
             msg = friendly_error_message(e)
             self.root.after(0, lambda: messagebox.showerror("Processing failed", msg))
+            self.root.after(0, lambda: self._log(f"Processing error: {msg}"))
         finally:
             self.root.after(0, self._stop_busy)
 
@@ -327,8 +362,7 @@ class AIModelGUI:
     def _populate_model_info(self):
         items: List[Dict[str, Any]] = []
         for model in (ImageClassificationModel(), SentimentAnalysisModel()):
-            info = model.get_model_info()
-            items.append(info)
+            items.append(model.get_model_info())
 
         lines = []
         for it in items:
@@ -345,7 +379,6 @@ class AIModelGUI:
                     notes=it.get("notes", "—"),
                 )
             )
-
         text = "Model registry:\n\n" + "\n".join(lines)
         self.info_box.configure(state="normal")
         self.info_box.delete("1.0", "end")
@@ -371,6 +404,33 @@ class AIModelGUI:
                 msg = f"Text length: {len(payload)} characters (max {self.config.get('text_max_len', 256)})"
         self.hint_lbl.configure(text=msg)
 
+    # Logs
+    def _toggle_logs(self):
+        if self.logs_visible:
+            try:
+                self.logs_frame.pack_forget()
+            except Exception:
+                pass
+            self.logs_visible = False
+            self._log("Logs panel hidden.")
+        else:
+            self.logs_frame.pack(fill="both", expand=False, padx=12, pady=(0, 12))
+            self.logs_visible = True
+            self._log("Logs panel shown.")
+
+    def _clear_logs(self):
+        self.log_text.configure(state="normal")
+        self.log_text.delete("1.0", "end")
+        self.log_text.configure(state="disabled")
+
+    def _log(self, msg: str):
+        ts = datetime.now().strftime("%H:%M:%S")
+        line = f"[{ts}] {msg}\n"
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", line)
+        self.log_text.configure(state="disabled")
+        self.log_text.see("end")
+
     # Busy UI helpers
     def _start_busy(self, msg: str):
         self.status_lbl.configure(text=msg)
@@ -379,6 +439,7 @@ class AIModelGUI:
         self.browse_btn.configure(state="disabled")
         self.sample_btn.configure(state="disabled")
         self.copy_btn.configure(state="disabled")
+        self.save_btn.configure(state="disabled")
         self.progress.start(12)
 
     def _stop_busy(self):
@@ -388,6 +449,7 @@ class AIModelGUI:
         self.clear_btn.configure(state="normal")
         self.sample_btn.configure(state="normal")
         self.copy_btn.configure(state="normal")
+        self.save_btn.configure(state="normal")
         self._on_model_change()
 
     def run(self):
