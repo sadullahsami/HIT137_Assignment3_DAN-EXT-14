@@ -1,456 +1,475 @@
-import os
-from pathlib import Path
-from datetime import datetime
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-from typing import List, Dict, Any
-import threading
+"""
+Main GUI Application using Tkinter with OOP concepts
+"""
 
+import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox, filedialog
+import threading
+import logging
 from image_classification_model import ImageClassificationModel
 from sentiment_analysis_model import SentimentAnalysisModel
-from base_model import friendly_error_message
-from utils import is_url, load_config, save_config, clamp_int
+import os
 
-class AIModelGUI:
-    """GUI: select model, input data, threaded processing, settings with persistence, logs & save results."""
-    MODEL_IMAGE = "Image Classification"
-    MODEL_TEXT = "Sentiment Analysis"
-
-    SAMPLE_IMAGE_URL = "https://huggingface.co/datasets/mishig/sample_images/resolve/main/dog.jpg"
-    SAMPLE_TEXT = "I absolutely love this product! It works better than I expected."
-
-    def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("HIT137 – AI Model Integration")
-        self.root.geometry("940x760")
-
-        # Load persisted config (or defaults)
-        self.config = load_config()
-
-        # Menu bars
-        self._build_menu()
-
-        # UI state
-        self.selected_model = tk.StringVar(value=self.MODEL_TEXT)
-        self.logs_visible = False
-
-        self._build_ui()
-        self._on_model_change()
-        self._update_hint()
-        self._log("Application started.")
-
-    # ------------------------- MENUS -------------------------
-    def _build_menu(self):
-        menubar = tk.Menu(self.root)
-
-        # View menu
-        view_menu = tk.Menu(menubar, tearoff=0)
-        view_menu.add_command(label="Toggle Logs Panel", command=self._toggle_logs)
-        view_menu.add_command(label="Clear Logs", command=self._clear_logs)
-        menubar.add_cascade(label="View", menu=view_menu)
-
-        # Settings menu
-        settings_menu = tk.Menu(menubar, tearoff=0)
-        settings_menu.add_command(label="Preferences…", command=self._open_settings)
-        menubar.add_cascade(label="Settings", menu=settings_menu)
-
-        # Help menu
-        help_menu = tk.Menu(menubar, tearoff=0)
-        help_menu.add_command(label="Quick Guide", command=self._show_help)
-        help_menu.add_separator()
-        help_menu.add_command(label="About", command=self._show_about)
-        menubar.add_cascade(label="Help", menu=help_menu)
-
-        self.root.config(menu=menubar)
-
-    def _show_help(self):
-        msg = (
-            "Quick Guide\n\n"
-            "1) Choose a model from the dropdown.\n"
-            "2) For Image Classification: paste an image URL or click ‘Browse Image…’\n"
-            "   For Sentiment Analysis: type/paste any text.\n"
-            "3) Click ‘Load Sample’ for an instant demo.\n"
-            "4) Click ‘Process’ and wait while the model runs.\n"
-            "5) Use ‘Copy Output’ to copy results; ‘Save Results’ to write to a file.\n"
-            "6) View → Toggle Logs Panel to see step-by-step logs."
-        )
-        messagebox.showinfo("Quick Guide", msg)
-
-    def _show_about(self):
-        messagebox.showinfo(
-            "About",
-            "HIT137 – AI Model Integration GUI\n"
-            "ViT for images, RoBERTa for sentiment.\n"
-            "Now with logs panel and save-to-file."
-        )
-
-    def _open_settings(self):
-        win = tk.Toplevel(self.root)
-        win.title("Preferences")
-        win.transient(self.root)
-        win.grab_set()
-
-        frm = ttk.Frame(win, padding=16)
-        frm.pack(fill="both", expand=True)
-
-        ttk.Label(frm, text="Image Top-K predictions (1–10):").grid(row=0, column=0, sticky="w", pady=(0,6))
-        topk_var = tk.IntVar(value=int(self.config.get("image_top_k", 5)))
-        tk.Spinbox(frm, from_=1, to=10, textvariable=topk_var, width=6).grid(row=0, column=1, sticky="w", pady=(0,6), padx=(8,0))
-
-        ttk.Label(frm, text="Sentiment Max Text Length (32–2048):").grid(row=1, column=0, sticky="w", pady=(0,6))
-        maxlen_var = tk.IntVar(value=int(self.config.get("text_max_len", 256)))
-        tk.Spinbox(frm, from_=32, to=2048, increment=32, textvariable=maxlen_var, width=6).grid(row=1, column=1, sticky="w", pady=(0,6), padx=(8,0))
-
-        btns = ttk.Frame(frm)
-        btns.grid(row=2, column=0, columnspan=2, sticky="e", pady=(12,0))
-        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right")
-        def on_save():
-            self.config["image_top_k"] = clamp_int(topk_var.get(), 1, 10)
-            self.config["text_max_len"] = clamp_int(maxlen_var.get(), 32, 2048)
-            save_config(self.config)
-            self._log(f"Settings saved: top_k={self.config['image_top_k']}, text_max_len={self.config['text_max_len']}")
-            messagebox.showinfo("Preferences", "Settings saved.")
-            win.destroy()
-        ttk.Button(btns, text="Save", command=on_save).pack(side="right", padx=(0,8))
-
-        for i in range(2):
-            frm.columnconfigure(i, weight=1)
-
-    # ------------------------- UI BUILD -------------------------
-    def _build_ui(self):
-        nb = ttk.Notebook(self.root)
-        nb.pack(fill="both", expand=True)
-
-        self.tab_ai = ttk.Frame(nb)
-        self.tab_info = ttk.Frame(nb)
-        self.tab_oop = ttk.Frame(nb)
-
-        nb.add(self.tab_ai, text="AI Models")
-        nb.add(self.tab_info, text="Model Information")
-        nb.add(self.tab_oop, text="OOP Concepts")
-
-        # --- AI MODELS TAB ---
-        top = ttk.Frame(self.tab_ai, padding=12)
-        top.pack(fill="x")
-
-        ttk.Label(top, text="Model:").pack(side="left")
-        self.model_combo = ttk.Combobox(
-            top,
-            textvariable=self.selected_model,
-            values=[self.MODEL_IMAGE, self.MODEL_TEXT],
-            state="readonly",
-            width=28,
-        )
-        self.model_combo.pack(side="left", padx=8)
-        self.model_combo.bind("<<ComboboxSelected>>", lambda e: (self._on_model_change(), self._update_hint(), self._log(f"Model selected: {self.selected_model.get()}")))
-
-        self.browse_btn = ttk.Button(top, text="Browse Image…", command=self._on_browse)
-        self.browse_btn.pack(side="left", padx=8)
-
-        # Input
-        input_frame = ttk.LabelFrame(self.tab_ai, text="Input", padding=12)
-        input_frame.pack(fill="both", expand=False, padx=12, pady=8)
-
-        self.input_text = tk.Text(input_frame, height=8, wrap="word")
-        self.input_text.pack(fill="both", expand=True)
-        self.input_text.bind("<KeyRelease>", lambda e: self._update_hint())
-
-        # Detection hint
-        self.hint_lbl = ttk.Label(input_frame, text="", foreground="")
-        self.hint_lbl.pack(anchor="w", pady=(6, 0))
-
-        # Actions
-        action_frame = ttk.Frame(self.tab_ai, padding=12)
-        action_frame.pack(fill="x")
-        self.process_btn = ttk.Button(action_frame, text="Process", command=self._on_process)
-        self.process_btn.pack(side="left")
-        self.clear_btn = ttk.Button(action_frame, text="Clear", command=self._on_clear)
-        self.clear_btn.pack(side="left", padx=8)
-        self.sample_btn = ttk.Button(action_frame, text="Load Sample", command=self._on_load_sample)
-        self.sample_btn.pack(side="left", padx=0)
-        self.copy_btn = ttk.Button(action_frame, text="Copy Output", command=self._on_copy_output)
-        self.copy_btn.pack(side="left", padx=8)
-        self.save_btn = ttk.Button(action_frame, text="Save Results", command=self._on_save_results)
-        self.save_btn.pack(side="left", padx=0)
-
-        # Status + Progress
-        status_frame = ttk.Frame(self.tab_ai, padding=(12, 0, 12, 12))
-        status_frame.pack(fill="x")
-        self.progress = ttk.Progressbar(status_frame, mode="indeterminate")
-        self.status_lbl = ttk.Label(status_frame, text="Idle.")
-        self.status_lbl.pack(side="left")
-        self.progress.pack(side="right", fill="x", expand=True, padx=(12, 0))
-
-        # Output
-        output_frame = ttk.LabelFrame(self.tab_ai, text="Output", padding=12)
-        output_frame.pack(fill="both", expand=True, padx=12, pady=8)
-
-        self.output_text = tk.Text(output_frame, height=14, wrap="word", state="disabled")
-        self.output_text.pack(fill="both", expand=True)
-
-        # Logs panel (hidden by default)
-        self.logs_frame = ttk.LabelFrame(self.tab_ai, text="Logs", padding=8)
-        self.log_text = tk.Text(self.logs_frame, height=10, wrap="word", state="disabled")
-        self.log_text.pack(fill="both", expand=True)
-
-        # --- MODEL INFORMATION TAB ---
-        info_inner = ttk.Frame(self.tab_info, padding=12)
-        info_inner.pack(fill="both", expand=True)
-
-        header = ttk.Frame(info_inner)
-        header.pack(fill="x", pady=(0, 8))
-        ttk.Label(header, text="Available Models", font=("TkDefaultFont", 11, "bold")).pack(side="left")
-        ttk.Button(header, text="Refresh", command=self._populate_model_info).pack(side="right")
-
-        self.info_box = tk.Text(info_inner, height=18, wrap="word", state="disabled")
-        self.info_box.pack(fill="both", expand=True)
-
-        self._populate_model_info()
-
-        # --- OOP CONCEPTS TAB ---
-        oop_inner = ttk.Frame(self.tab_oop, padding=12)
-        oop_inner.pack(fill="both", expand=True)
-        oop_text = (
-            "OOP Concepts used:\n"
-            "• Abstraction: BaseModel defines the interface\n"
-            "• Inheritance: models derive from BaseModel\n"
-            "• Polymorphism: same .process() with different behavior\n"
-            "• Encapsulation: private attrs (e.g., _model_name, _pipeline)\n"
-            "• Decorators: validation & logging\n"
-            "• Settings persistence via utils.load_config/save_config\n"
-            "• Logging: in-UI logs panel with toggle and clear"
-        )
-        lbl = tk.Text(oop_inner, height=12, wrap="word")
-        lbl.insert("1.0", oop_text)
-        lbl.configure(state="disabled")
-        lbl.pack(fill="both", expand=True)
-
-    # ------------------------- EVENTS -------------------------
-    def _on_model_change(self):
-        model = self.selected_model.get()
-        self.browse_btn.configure(state="normal" if model == self.MODEL_IMAGE else "disabled")
-
-    def _on_browse(self):
-        path = filedialog.askopenfilename(
-            title="Select an image",
-            filetypes=[
-                ("Images", "*.png *.jpg *.jpeg *.gif *.bmp *.tiff *.webp"),
-                ("All files", "*.*"),
-            ],
-        )
-        if path:
-            self.input_text.delete("1.0", "end")
-            self.input_text.insert("1.0", path)
-            self._log(f"Selected image file: {path}")
-            self._update_hint()
-
-    def _on_clear(self):
-        self.input_text.delete("1.0", "end")
-        self._set_output("")
-        self._update_hint()
-        self._log("Cleared input and output.")
-
-    def _on_load_sample(self):
-        sample = self.SAMPLE_IMAGE_URL if self.selected_model.get() == self.MODEL_IMAGE else self.SAMPLE_TEXT
-        self.input_text.delete("1.0", "end")
-        self.input_text.insert("1.0", sample)
-        self._update_hint()
-        self._log("Loaded sample input.")
-
-    def _on_copy_output(self):
-        text = self.output_text.get("1.0", "end").strip()
-        if not text:
-            messagebox.showinfo("Copy Output", "Nothing to copy.")
-            return
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text)
-        self.root.update()
-        self._log("Output copied to clipboard.")
-        messagebox.showinfo("Copy Output", "Output copied to clipboard.")
-
-    def _on_save_results(self):
-        """Save current output to results/YYYYmmdd_HHMMSS.txt"""
-        text = self.output_text.get("1.0", "end").strip()
-        if not text:
-            messagebox.showinfo("Save Results", "Nothing to save.")
-            return
-        out_dir = Path("results")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        fname = out_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-        try:
-            fname.write_text(text, encoding="utf-8")
-            self._log(f"Results saved: {fname}")
-            messagebox.showinfo("Save Results", f"Saved to:\n{fname}")
-        except Exception as e:
-            messagebox.showerror("Save Results", f"Failed to save: {e}")
-
-    def _on_process(self):
-        model_name = self.selected_model.get()
-        user_input = self.input_text.get("1.0", "end").strip()
-        if not user_input:
-            if model_name == self.MODEL_TEXT:
-                messagebox.showwarning("Input required", "Please enter some text to analyse.")
-            else:
-                messagebox.showwarning("Input required", "Please provide an image URL or choose a local file.")
-            return
-
-        self._start_busy("Loading model & processing…")
-        self._log(f"Processing started with model: {model_name}")
-        t = threading.Thread(target=self._do_process, args=(model_name, user_input), daemon=True)
-        t.start()
-
-    # ------------------------- BACKGROUND WORK -------------------------
-    def _do_process(self, model_name: str, user_input: str):
-        try:
-            model = self._get_model(model_name)
-
-            # Apply settings to the model instance
-            if isinstance(model, ImageClassificationModel):
-                model._top_k = clamp_int(self.config.get("image_top_k", 5), 1, 10)
-            else:
-                model._max_len = clamp_int(self.config.get("text_max_len", 256), 32, 2048)
-
-            model.load_model()
-            result = model.process(user_input)
-            self.root.after(0, lambda: self._render_result(result))
-            self.root.after(0, lambda: self._log("Processing finished successfully."))
-        except Exception as e:
-            msg = friendly_error_message(e)
-            self.root.after(0, lambda: messagebox.showerror("Processing failed", msg))
-            self.root.after(0, lambda: self._log(f"Processing error: {msg}"))
-        finally:
-            self.root.after(0, self._stop_busy)
-
-    # ------------------------- HELPERS -------------------------
-    def _get_model(self, model_name: str):
-        if model_name == self.MODEL_IMAGE:
+class ModelFactory:
+    """Factory pattern for creating models - demonstrates design patterns"""
+    
+    @staticmethod
+    def create_model(model_type: str):
+        """Factory method to create models"""
+        if model_type == "Image Classification":
             return ImageClassificationModel()
-        return SentimentAnalysisModel()
-
-    def _render_result(self, result: Any):
-        if isinstance(result, list):
-            self._set_output(self._format_predictions(result))
+        elif model_type == "Sentiment Analysis":
+            return SentimentAnalysisModel()
         else:
-            self._set_output(str(result))
+            raise ValueError(f"Unknown model type: {model_type}")
 
-    def _format_predictions(self, preds: List[Dict[str, Any]]) -> str:
-        lines: List[str] = []
-        for i, item in enumerate(preds, start=1):
-            label = str(item.get("label", "N/A"))
-            try:
-                score = float(item.get("score", 0))
-            except Exception:
-                score = 0.0
-            bar = self._bar(score, width=24)
-            pct = f"{score * 100:.1f}%"
-            lines.append(f"{i:>2}. {label}\n    {bar} {pct}")
-        return "\n".join(lines)
-
-    def _bar(self, score: float, width: int = 24) -> str:
-        if score < 0: score = 0.0
-        if score > 1: score = 1.0
-        filled = int(round(score * width))
-        return "█" * filled + "·" * (width - filled)
-
-    def _set_output(self, text: str):
-        self.output_text.configure(state="normal")
-        self.output_text.delete("1.0", "end")
-        if text:
-            self.output_text.insert("1.0", text)
-        self.output_text.configure(state="disabled")
-
-    def _populate_model_info(self):
-        items: List[Dict[str, Any]] = []
-        for model in (ImageClassificationModel(), SentimentAnalysisModel()):
-            items.append(model.get_model_info())
-
-        lines = []
-        for it in items:
-            lines.append(
-                "- Name: {name}\n"
-                "  Type: {type}\n"
-                "  Task: {task}\n"
-                "  Provider: {provider}\n"
-                "  Notes: {notes}\n".format(
-                    name=it.get("name", "N/A"),
-                    type=it.get("type", "N/A"),
-                    task=it.get("task", "N/A"),
-                    provider=it.get("provider", "N/A"),
-                    notes=it.get("notes", "—"),
-                )
-            )
-        text = "Model registry:\n\n" + "\n".join(lines)
-        self.info_box.configure(state="normal")
-        self.info_box.delete("1.0", "end")
-        self.info_box.insert("1.0", text)
-        self.info_box.configure(state="disabled")
-
-    def _update_hint(self):
-        model = self.selected_model.get()
-        payload = self.input_text.get("1.0", "end").strip()
-        if model == self.MODEL_IMAGE:
-            if not payload:
-                msg = "Tip: Paste an image URL (http/https) or click ‘Browse Image…’ to pick a local file."
-            elif is_url(payload):
-                msg = "Detected: Image URL"
-            elif os.path.exists(payload):
-                msg = "Detected: Local file path"
-            else:
-                msg = "Input not recognized as URL/path. Provide a valid image URL or file path."
+class GuiBase:
+    """Base class for GUI components - demonstrates inheritance"""
+    
+    def __init__(self):
+        self._setup_logging()
+        self.models = {}
+        self._initialize_models()
+    
+    def _setup_logging(self):
+        """Setup logging configuration"""
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+    
+    def _initialize_models(self):
+        """Initialize AI models"""
+        try:
+            self.models["Image Classification"] = ModelFactory.create_model("Image Classification")
+            self.models["Sentiment Analysis"] = ModelFactory.create_model("Sentiment Analysis")
+        except Exception as e:
+            logging.error(f"Error initializing models: {e}")
+    
+    def show_message(self, title: str, message: str, msg_type: str = "info"):
+        """Show message to user"""
+        if msg_type == "error":
+            messagebox.showerror(title, message)
+        elif msg_type == "warning":
+            messagebox.showwarning(title, message)
         else:
-            if not payload:
-                msg = "Tip: Type or paste any text, then click ‘Process’."
-            else:
-                msg = f"Text length: {len(payload)} characters (max {self.config.get('text_max_len', 256)})"
-        self.hint_lbl.configure(text=msg)
+            messagebox.showinfo(title, message)
 
-    # Logs
-    def _toggle_logs(self):
-        if self.logs_visible:
-            try:
-                self.logs_frame.pack_forget()
-            except Exception:
-                pass
-            self.logs_visible = False
-            self._log("Logs panel hidden.")
-        else:
-            self.logs_frame.pack(fill="both", expand=False, padx=12, pady=(0, 12))
-            self.logs_visible = True
-            self._log("Logs panel shown.")
+class ModelInfoMixin:
+    """Mixin class for model information display - demonstrates multiple inheritance"""
+    
+    def format_model_info(self, model_info: dict) -> str:
+        """Format model information for display"""
+        info_text = f"Model: {model_info.get('name', 'Unknown')}\n"
+        info_text += f"Type: {model_info.get('type', 'Unknown')}\n"
+        info_text += f"Category: {model_info.get('category', 'Unknown')}\n"
+        info_text += f"Description: {model_info.get('description', 'No description')}\n"
+        info_text += f"Input Type: {model_info.get('input_type', 'Unknown')}\n"
+        info_text += f"Output Type: {model_info.get('output_type', 'Unknown')}\n"
+        info_text += f"Model Size: {model_info.get('model_size', 'Unknown')}\n"
+        info_text += f"Use Case: {model_info.get('use_case', 'General')}\n"
+        info_text += f"Status: {model_info.get('status', 'Unknown')}\n"
+        return info_text
 
-    def _clear_logs(self):
-        self.log_text.configure(state="normal")
-        self.log_text.delete("1.0", "end")
-        self.log_text.configure(state="disabled")
+class AIModelGUI(GuiBase, ModelInfoMixin):
+    """Main GUI Application - demonstrates multiple inheritance, polymorphism, and encapsulation"""
+    
+    def __init__(self):
+        super().__init__()  # Call parent constructor
+        self.root = tk.Tk()
+        self.root.title("AI Model Integration GUI")
+        self.root.geometry("1000x800")
+        self.root.resizable(True, True)
+        
+        # Private attributes - demonstrates encapsulation
+        self._current_model = None
+        self._processing = False
+        
+        self._setup_gui()
+        self._setup_styles()
+    
+    def _setup_styles(self):
+        """Setup GUI styles"""
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Configure custom styles
+        style.configure('Title.TLabel', font=('Arial', 16, 'bold'))
+        style.configure('Subtitle.TLabel', font=('Arial', 12, 'bold'))
+        style.configure('Info.TLabel', font=('Arial', 10))
+    
+    def _setup_gui(self):
+        """Setup the main GUI components"""
+        # Create main notebook for tabs
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # Create tabs
+        self._create_model_tab()
+        self._create_info_tab()
+        self._create_oop_explanation_tab()
+    
+    def _create_model_tab(self):
+        """Create the main model interaction tab"""
+        model_frame = ttk.Frame(self.notebook)
+        self.notebook.add(model_frame, text="AI Models")
+        
+        # Title
+        title_label = ttk.Label(model_frame, text="AI Model Integration", style='Title.TLabel')
+        title_label.pack(pady=10)
+        
+        # Model selection frame
+        selection_frame = ttk.LabelFrame(model_frame, text="Model Selection", padding=10)
+        selection_frame.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Label(selection_frame, text="Select AI Model:").pack(anchor='w')
+        self.model_var = tk.StringVar(value="Image Classification")
+        model_combo = ttk.Combobox(
+            selection_frame, 
+            textvariable=self.model_var,
+            values=["Image Classification", "Sentiment Analysis"],
+            state="readonly"
+        )
+        model_combo.pack(fill='x', pady=5)
+        model_combo.bind('<<ComboboxSelected>>', self._on_model_change)
+        
+        # Input frame
+        input_frame = ttk.LabelFrame(model_frame, text="Input", padding=10)
+        input_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        
+        ttk.Label(input_frame, text="Enter image URL or file path:").pack(anchor='w')
+        
+        # Create a frame for input and browse button
+        input_container = ttk.Frame(input_frame)
+        input_container.pack(fill='both', expand=True, pady=5)
+        
+        self.input_text = scrolledtext.ScrolledText(
+            input_container, 
+            height=8, 
+            wrap=tk.WORD,
+            font=('Arial', 11)
+        )
+        self.input_text.pack(side='left', fill='both', expand=True, padx=(0, 5))
+        
+        # Browse button frame (vertical)
+        browse_frame = ttk.Frame(input_container)
+        browse_frame.pack(side='right', fill='y')
+        
+        self.browse_btn = ttk.Button(
+            browse_frame,
+            text="Browse\nImage",
+            command=self._browse_image,
+            width=10
+        )
+        self.browse_btn.pack(pady=5)
+        
+        # Buttons frame
+        button_frame = ttk.Frame(input_frame)
+        button_frame.pack(fill='x', pady=5)
+        
+        self.process_btn = ttk.Button(
+            button_frame, 
+            text="Process", 
+            command=self._process_text
+        )
+        self.process_btn.pack(side='left', padx=5)
+        
+        ttk.Button(
+            button_frame, 
+            text="Clear Input", 
+            command=self._clear_input
+        ).pack(side='left', padx=5)
+        
+        ttk.Button(
+            button_frame, 
+            text="Load Sample Text", 
+            command=self._load_sample_text
+        ).pack(side='left', padx=5)
+        
+        # Output frame
+        output_frame = ttk.LabelFrame(model_frame, text="Output", padding=10)
+        output_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        
+        self.output_text = scrolledtext.ScrolledText(
+            output_frame, 
+            height=8, 
+            wrap=tk.WORD,
+            font=('Arial', 11),
+            state='disabled'
+        )
+        self.output_text.pack(fill='both', expand=True, pady=5)
+        
+        # Progress bar
+        self.progress = ttk.Progressbar(
+            output_frame, 
+            mode='indeterminate'
+        )
+        self.progress.pack(fill='x', pady=5)
+    
+    def _create_info_tab(self):
+        """Create the model information tab"""
+        info_frame = ttk.Frame(self.notebook)
+        self.notebook.add(info_frame, text="Model Information")
+        
+        title_label = ttk.Label(info_frame, text="AI Model Information", style='Title.TLabel')
+        title_label.pack(pady=10)
+        
+        # Model selection for info
+        selection_frame = ttk.Frame(info_frame)
+        selection_frame.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Label(selection_frame, text="Select Model for Information:").pack(side='left')
+        self.info_model_var = tk.StringVar(value="Image Classification")
+        info_combo = ttk.Combobox(
+            selection_frame,
+            textvariable=self.info_model_var,
+            values=["Image Classification", "Sentiment Analysis"],
+            state="readonly"
+        )
+        info_combo.pack(side='left', padx=10)
+        info_combo.bind('<<ComboboxSelected>>', self._update_model_info)
+        
+        # Model info display
+        self.model_info_text = scrolledtext.ScrolledText(
+            info_frame,
+            height=20,
+            wrap=tk.WORD,
+            font=('Arial', 11),
+            state='disabled'
+        )
+        self.model_info_text.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # Update info initially
+        self._update_model_info()
+    
+    def _create_oop_explanation_tab(self):
+        """Create the OOP concepts explanation tab"""
+        oop_frame = ttk.Frame(self.notebook)
+        self.notebook.add(oop_frame, text="OOP Concepts Explanation")
+        
+        title_label = ttk.Label(oop_frame, text="Object-Oriented Programming Concepts", style='Title.TLabel')
+        title_label.pack(pady=10)
+        
+        oop_text = scrolledtext.ScrolledText(
+            oop_frame,
+            wrap=tk.WORD,
+            font=('Arial', 11),
+            state='normal'
+        )
+        oop_text.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # Add OOP explanation content
+        oop_explanation = self._get_oop_explanation()
+        oop_text.insert('1.0', oop_explanation)
+        oop_text.config(state='disabled')
+    
+    def _get_oop_explanation(self) -> str:
+        """Get OOP concepts explanation text"""
+        return """
+OOP CONCEPTS IMPLEMENTED IN THIS APPLICATION:
 
-    def _log(self, msg: str):
-        ts = datetime.now().strftime("%H:%M:%S")
-        line = f"[{ts}] {msg}\n"
-        self.log_text.configure(state="normal")
-        self.log_text.insert("end", line)
-        self.log_text.configure(state="disabled")
-        self.log_text.see("end")
+1. ENCAPSULATION:
+   - Private attributes in BaseModel class (e.g., self._model_name, self._model)
+   - Property decorators for controlled access to private attributes
+   - Methods to control access to internal model state
 
-    # Busy UI helpers
-    def _start_busy(self, msg: str):
-        self.status_lbl.configure(text=msg)
-        self.process_btn.configure(state="disabled")
-        self.clear_btn.configure(state="disabled")
-        self.browse_btn.configure(state="disabled")
-        self.sample_btn.configure(state="disabled")
-        self.copy_btn.configure(state="disabled")
-        self.save_btn.configure(state="disabled")
-        self.progress.start(12)
+2. INHERITANCE:
+   - BaseModel as abstract base class
+   - TextGenerationModel and SentimentAnalysisModel inherit from BaseModel
+   - GuiBase class provides common functionality for GUI components
+   - AIModelGUI inherits from GuiBase
 
-    def _stop_busy(self):
+3. MULTIPLE INHERITANCE:
+   - ImageClassificationModel and SentimentAnalysisModel inherit from both BaseModel and ModelMixin
+   - AIModelGUI inherits from both GuiBase and ModelInfoMixin
+   - Demonstrates combining functionality from multiple parent classes
+
+4. POLYMORPHISM:
+   - process() method implemented differently in each model class
+   - Same method name, different implementations based on model type
+   - Factory pattern creates different model instances with same interface
+
+5. METHOD OVERRIDING:
+   - get_model_info() method overridden in specific model classes
+   - load_model() method customized for each model type
+   - Provides specialized behavior while maintaining consistent interface
+
+6. MULTIPLE DECORATORS:
+   - @log_method_call decorator for logging method execution
+   - @validate_input decorator for input validation
+   - Applied to multiple methods demonstrating decorator stacking
+
+7. ABSTRACTION:
+   - BaseModel as abstract base class with abstract methods
+   - Defines interface that must be implemented by subclasses
+   - Hides implementation details while providing consistent interface
+
+8. DESIGN PATTERNS:
+   - Factory Pattern: ModelFactory class creates model instances
+   - Mixin Pattern: ModelMixin and ModelInfoMixin provide additional functionality
+   - Template Method Pattern: Base class defines algorithm structure
+
+IMPLEMENTATION DETAILS:
+
+File Organization:
+- base_model.py: Contains base classes, decorators, and mixins
+- image_classification_model.py: Implements image classification functionality
+- sentiment_analysis_model.py: Implements sentiment analysis functionality
+- gui_application.py: Main GUI application with all OOP concepts integrated
+- main.py: Entry point that orchestrates the application
+
+Benefits of OOP Approach:
+- Code reusability through inheritance
+- Maintainable and extensible design
+- Clear separation of concerns
+- Consistent interface across different model types
+- Easy to add new models by extending base classes
+"""
+    
+    def _on_model_change(self, event=None):
+        """Handle model selection change - demonstrates event handling"""
+        model_name = self.model_var.get()
+        if model_name in self.models:
+            self._current_model = self.models[model_name]
+            self._update_ui_for_model()
+    
+    def _update_ui_for_model(self):
+        """Update UI based on selected model"""
+        if self._current_model:
+            # Update placeholder text and browse button visibility based on model type
+            if isinstance(self._current_model, ImageClassificationModel):
+                self.input_text.delete('1.0', tk.END)
+                self.input_text.insert('1.0', 'Enter image URL or file path for classification...')
+                # Show browse button for image classification
+                self.browse_btn.config(state='normal')
+            elif isinstance(self._current_model, SentimentAnalysisModel):
+                self.input_text.delete('1.0', tk.END)
+                self.input_text.insert('1.0', 'Enter text for sentiment analysis...')
+                # Hide browse button for sentiment analysis
+                self.browse_btn.config(state='disabled')
+    
+    def _process_text(self):
+        """Process text using selected model - demonstrates threading"""
+        if self._processing:
+            return
+        
+        input_text = self.input_text.get('1.0', tk.END).strip()
+        if not input_text or input_text.startswith('Enter'):
+            self.show_message("Input Error", "Please enter some text to process.", "error")
+            return
+        
+        model_name = self.model_var.get()
+        if model_name not in self.models:
+            self.show_message("Model Error", "Please select a valid model.", "error")
+            return
+        
+        # Start processing in separate thread
+        threading.Thread(
+            target=self._process_in_thread, 
+            args=(input_text, model_name),
+            daemon=True
+        ).start()
+    
+    def _process_in_thread(self, input_text: str, model_name: str):
+        """Process text in separate thread to avoid GUI freezing"""
+        self._processing = True
+        self.root.after(0, self._start_processing_ui)
+        
+        try:
+            model = self.models[model_name]
+            result = model.process(input_text)  # Polymorphic method call
+            self.root.after(0, self._display_result, result)
+        except Exception as e:
+            error_msg = f"Error processing text: {str(e)}"
+            self.root.after(0, self._display_result, error_msg)
+        finally:
+            self._processing = False
+            self.root.after(0, self._stop_processing_ui)
+    
+    def _start_processing_ui(self):
+        """Update UI when processing starts"""
+        self.process_btn.config(text="Processing...", state='disabled')
+        self.progress.start()
+        
+        # Clear output
+        self.output_text.config(state='normal')
+        self.output_text.delete('1.0', tk.END)
+        self.output_text.insert('1.0', "Processing your request...")
+        self.output_text.config(state='disabled')
+    
+    def _stop_processing_ui(self):
+        """Update UI when processing stops"""
+        self.process_btn.config(text="Process Text", state='normal')
         self.progress.stop()
-        self.status_lbl.configure(text="Idle.")
-        self.process_btn.configure(state="normal")
-        self.clear_btn.configure(state="normal")
-        self.sample_btn.configure(state="normal")
-        self.copy_btn.configure(state="normal")
-        self.save_btn.configure(state="normal")
-        self._on_model_change()
-
+    
+    def _display_result(self, result: str):
+        """Display processing result"""
+        self.output_text.config(state='normal')
+        self.output_text.delete('1.0', tk.END)
+        self.output_text.insert('1.0', result)
+        self.output_text.config(state='disabled')
+    
+    def _browse_image(self):
+        """Open file dialog to browse and select an image file"""
+        # Define supported image file types
+        filetypes = [
+            ("Image files", "*.jpg *.jpeg *.png *.gif *.bmp *.tiff *.webp"),
+            ("JPEG files", "*.jpg *.jpeg"),
+            ("PNG files", "*.png"),
+            ("GIF files", "*.gif"),
+            ("BMP files", "*.bmp"),
+            ("All files", "*.*")
+        ]
+        
+        try:
+            # Open file dialog
+            filename = filedialog.askopenfilename(
+                title="Select an Image File",
+                filetypes=filetypes,
+                initialdir=os.path.expanduser("~")  # Start in user's home directory
+            )
+            
+            # If user selected a file, insert its path into the input text
+            if filename:
+                self.input_text.delete('1.0', tk.END)
+                self.input_text.insert('1.0', filename)
+                
+                # Show confirmation message
+                filename_display = os.path.basename(filename)
+                self.show_message("File Selected", f"Selected image: {filename_display}")
+                
+        except Exception as e:
+            self.show_message("Browse Error", f"Error browsing for image: {str(e)}", "error")
+    
+    def _clear_input(self):
+        """Clear input text"""
+        self.input_text.delete('1.0', tk.END)
+    
+    def _load_sample_text(self):
+        """Load sample text based on selected model"""
+        model_name = self.model_var.get()
+        if model_name == "Image Classification":
+            sample_text = "https://images.unsplash.com/photo-1518717758536-85ae29035b6d?w=400"
+        else:  # Sentiment Analysis
+            sample_text = "I really love this product! It works perfectly and exceeded my expectations."
+        
+        self.input_text.delete('1.0', tk.END)
+        self.input_text.insert('1.0', sample_text)
+    
+    def _update_model_info(self, event=None):
+        """Update model information display"""
+        model_name = self.info_model_var.get()
+        if model_name in self.models:
+            model = self.models[model_name]
+            model_info = model.get_model_info()
+            formatted_info = self.format_model_info(model_info)  # Using mixin method
+            
+            self.model_info_text.config(state='normal')
+            self.model_info_text.delete('1.0', tk.END)
+            self.model_info_text.insert('1.0', formatted_info)
+            self.model_info_text.config(state='disabled')
+    
     def run(self):
+        """Start the GUI application"""
+        self._on_model_change()  # Initialize with default model
         self.root.mainloop()
